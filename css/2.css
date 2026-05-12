@@ -1,0 +1,57 @@
+@font-face {
+  font-family: 'Onryo';
+  src: url('fonts/Onryo.ttf') format('truetype');
+}
+
+canvas {
+    width: 100vw;
+    height: 100vh;
+    border: 3px solid black;
+    position: fixed;
+    top: 0;
+    left: 0;
+    transform: none;
+}
+
+body {
+    user-select: none;       /* 標準 */
+    -webkit-user-select: none; /* Safari/Chrome */
+    -moz-user-select: none;    /* Firefox */
+    -ms-user-select: none;     /* IE/Edge旧 */
+    margin: 0;
+    height: 100vh;
+    display: flex;
+    justify-content: center; /* 横方向中央 */
+    align-items: center;     /* 縦方向中央 */
+}
+
+#start {
+    background: #000;
+    color: #ff0000;
+    font-family: cursive;
+    padding: 30px 60px;
+    border: 2px solid #800000;
+    font-size: 30px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+    z-index: 10;
+}
+
+#start:hover {
+    color: #fff;
+    background: linear-gradient(90deg, #400000, #800000);
+    text-shadow: 0 0 10px #ff0000, 0 0 20px #ff0000;
+    animation: shake 0.2s infinite;
+}
+
+@keyframes shake {
+    0% { transform: translate(1px, 1px) rotate(0deg); }
+    25% { transform: translate(-1px, -2px) rotate(-1deg); }
+    50% { transform: translate(-3px, 0px) rotate(1deg); }
+    75% { transform: translate(3px, 2px) rotate(0deg); }
+    100% { transform: translate(1px, -1px) rotate(1deg); }
+}
+
