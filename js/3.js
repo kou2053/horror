@@ -323,6 +323,7 @@ function createMessageBox() {
 function showNextLine() {
     if (currentLine >= scenario.length) {
         messageBox.remove();
+        requestAnimationFrame(gameLoop);
         return;
     }
 
@@ -690,8 +691,5 @@ class Enemy {
     }
 }
 
-        // --- Loop ---
 const player = new Player(GAME_SETTINGS.playerType);
 const enemies = ENEMY_SPAWNS.map(({ x, y, type }) => new Enemy(x, y, type));
-
-requestAnimationFrame(gameLoop);
