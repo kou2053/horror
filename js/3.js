@@ -368,4 +368,273 @@ function drawGame() {
     // 画面をクリアして再描画
 }
 
-requestAnimationFrame(gameLoop);
+//敵の動き
+// --- Settings ---
+const TILE_SIZE = 64;
+const GRID_WIDTH = 30;
+const GRID_HEIGHT = 30;
+const WORLD_MAP = Array.from({ length: GRID_HEIGHT }, () => Array(GRID_WIDTH).fill(0));
+
+// Create Walls
+for(let i=0; i<GRID_WIDTH; i++) { WORLD_MAP[0][i] = 1; WORLD_MAP[GRID_HEIGHT-1][i] = 1; }
+for(let i=0; i<GRID_HEIGHT; i++) { WORLD_MAP[i][0] = 1; WORLD_MAP[i][GRID_WIDTH-1] = 1; }
+        
+// Add some hiding spots (walls)
+function addWallRect(x, y, w, h) {
+    for(let i=y; i<y+h; i++) for(let j=x; j<x+w; j++) WORLD_MAP[i][j] = 1;
+}
+addWallRect(5, 5, 2, 6);
+addWallRect(12, 4, 6, 2);
+addWallRect(8, 15, 8, 1);
+addWallRect(20, 10, 2, 10);
+
+const keys = {};
+window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+// --- Core Math ---
+function getDistance(a, b) {
+    return Math.sqrt((a.x - b.x)**2 + (a.y - b.y)**2);
+}
+
+// --- Critical: Line of Sight Check ---
+function hasLineOfSight(from, to) {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+            
+    // 8ピクセルごとにレイを飛ばして壁に当たるか確認
+    const stepSize = 8;
+    const steps = dist / stepSize;
+            
+    for (let i = 1; i < steps; i++) {
+        const checkX = from.x + (dx * (i / steps));
+        const checkY = from.y + (dy * (i / steps));
+                
+        const gridX = Math.floor(checkX / TILE_SIZE);
+        const gridY = Math.floor(checkY / TILE_SIZE);
+                
+        if (WORLD_MAP[gridY] && WORLD_MAP[gridY][gridX] === 1) {
+            return false; // 壁に遮られた
+        }
+    }
+    return true; // プレイヤーが見える
+}
+
+// --- A* Pathfinding ---
+function findPath(start, target) {
+    const sX = Math.floor(start.x / TILE_SIZE);
+    const sY = Math.floor(start.y / TILE_SIZE);
+    const tX = Math.floor(target.x / TILE_SIZE);
+    const tY = Math.floor(target.y / TILE_SIZE);
+            
+    if (sX === tX && sY === tY) return [];
+
+    const openSet = [{ x: sX, y: sY, g: 0, f: 0, parent: null }];
+    const closedSet = new Set();
+            
+    while (openSet.length > 0) {
+        openSet.sort((a, b) => a.f - b.f);
+        const current = openSet.shift();
+        const key = `${current.x},${current.y}`;
+                
+        if (current.x === tX && current.y === tY) {
+            const path = [];
+            let temp = current;
+            while (temp.parent) {
+                path.push({ x: temp.x * TILE_SIZE + TILE_SIZE/2, y: temp.y * TILE_SIZE + TILE_SIZE/2 });
+                temp = temp.parent;
+            }
+            return path.reverse();
+        }
+                
+        closedSet.add(key);
+
+        const dirs = [
+            {x:0, y:1, c:1}, {x:0, y:-1, c:1}, {x:1, y:0, c:1}, {x:-1, y:0, c:1},
+            {x:1, y:1, c:1.41}, {x:1, y:-1, c:1.41}, {x:-1, y:1, c:1.41}, {x:-1, y:-1, c:1.41}
+        ];
+
+        for (let d of dirs) {
+            const nx = current.x + d.x, ny = current.y + d.y;
+            if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT || WORLD_MAP[ny][nx] === 1 || closedSet.has(`${nx},${ny}`)) continue;
+            // 斜め移動時の角抜け防止
+            if (d.c > 1 && (WORLD_MAP[current.y][nx] === 1 || WORLD_MAP[ny][current.x] === 1)) continue;
+
+            const g = current.g + d.c;
+            const h = Math.abs(nx - tX) + Math.abs(ny - tY);
+            openSet.push({ x: nx, y: ny, g, f: g+h, parent: current });
+        }
+    }
+    return [];
+}
+
+// --- Collision Math (OBB) ---
+function checkCircleRectCollision(circle, rect) {
+    let cx = circle.x - rect.x;
+    let cy = circle.y - rect.y;
+    const cos = Math.cos(-rect.angle), sin = Math.sin(-rect.angle);
+    const rx = cx * cos - cy * sin, ry = cx * sin + cy * cos;
+    let closestX = Math.max(-rect.width/2, Math.min(rx, rect.width/2));
+    let closestY = Math.max(-rect.height/2, Math.min(ry, rect.height/2));
+    const dist = Math.sqrt((rx - closestX)**2 + (ry - closestY)**2);
+    return dist < circle.radius;
+}
+
+// --- Entities ---
+class Player {
+    constructor() {
+        this.x = TILE_SIZE * 2.5;
+        this.y = TILE_SIZE * 2.5;
+        this.radius = 16;
+        this.speed = 5;
+    }
+    update() {
+        let dx = 0, dy = 0;
+        if (keys['KeyW'] || keys['ArrowUp']) dy -= 1;
+        if (keys['KeyS'] || keys['ArrowDown']) dy += 1;
+        if (keys['KeyA'] || keys['ArrowLeft']) dx -= 1;
+        if (keys['KeyD'] || keys['ArrowRight']) dx += 1;
+        if (dx !== 0 && dy !== 0) { dx *= 0.707; dy *= 0.707; }
+
+        const nx = this.x + dx * this.speed, ny = this.y + dy * this.speed;
+        if (WORLD_MAP[Math.floor(this.y/TILE_SIZE)][Math.floor(nx/TILE_SIZE)] === 0) this.x = nx;
+        if (WORLD_MAP[Math.floor(ny/TILE_SIZE)][Math.floor(this.x/TILE_SIZE)] === 0) this.y = ny;
+    }
+    draw(cx, cy) {
+        ctx.fillStyle = '#00f2ff';
+        ctx.beginPath();
+        ctx.arc(this.x - cx, this.y - cy, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+        }
+}
+
+class Enemy {
+    constructor(x, y, type) {
+        this.x = x; this.y = y; this.type = type;
+        this.angle = 0; this.state = 'patrol'; this.path = []; this.lastUpdate = 0;
+                
+        const configs = {
+            scout: { speed: 3.0, viewDist: 250, viewAngle: Math.PI/1.5, color: '#00ffaa', hitbox: 'circle', radius: 15 },
+            tank: { speed: 1.5, viewDist: 400, viewAngle: Math.PI*2, color: '#ffcc00', hitbox: 'rect', width: 50, height: 50 },
+            predator: { speed: 4.0, viewDist: 350, viewAngle: Math.PI/4, color: '#ff3366', hitbox: 'rect', width: 25, height: 80 }
+        };
+        this.config = configs[type];
+    }
+
+    update(player) {
+        const dist = getDistance(this, player);
+        const angleTo = Math.atan2(player.y - this.y, player.x - this.x);
+        let diff = Math.abs(this.angle - angleTo);
+        while(diff > Math.PI) diff = Math.PI * 2 - diff;
+
+        // 視線遮蔽のチェック
+        const hasLoS = hasLineOfSight(this, player);
+
+        if (this.state === 'patrol') {
+            // 「視界の範囲内」かつ「角度が正面」かつ「間に壁がない」
+            if (dist < this.config.viewDist && diff < this.config.viewAngle/2 && hasLoS) {
+                this.state = 'chasing';
+            } else if (this.path.length === 0) {
+                const rx = (1.5 + Math.floor(Math.random()*(GRID_WIDTH-3))) * TILE_SIZE;
+                const ry = (1.5 + Math.floor(Math.random()*(GRID_HEIGHT-3))) * TILE_SIZE;
+                this.path = findPath(this, {x:rx, y:ry});
+            }
+        } else if (this.state === 'chasing') {
+            // 追跡中はある程度離れるまで追いかける
+            if (dist > this.config.viewDist * 1.8) {
+                this.state = 'patrol';
+                this.path = [];
+            } else if (Date.now() - this.lastUpdate > 400) {
+                this.path = findPath(this, player);
+                this.lastUpdate = Date.now();
+            }
+        }
+
+        if (this.path.length > 0) {
+            const target = this.path[0];
+            const moveAngle = Math.atan2(target.y - this.y, target.x - this.x);
+            this.x += Math.cos(moveAngle) * this.config.speed;
+            this.y += Math.sin(moveAngle) * this.config.speed;
+                    
+            let aDiff = moveAngle - this.angle;
+            while (aDiff < -Math.PI) aDiff += Math.PI * 2;
+            while (aDiff > Math.PI) aDiff -= Math.PI * 2;
+            this.angle += aDiff * 0.1;
+            if (getDistance(this, target) < 10) this.path.shift();
+        }
+
+        // 衝突判定
+        let collided = false;
+        if (this.config.hitbox === 'circle') collided = dist < (this.config.radius + player.radius);
+        else collided = checkCircleRectCollision(player, {x:this.x, y:this.y, width:this.config.width, height:this.config.height, angle:this.angle});
+                
+        if (collided) { /* ゲームオーバー処理等をここに */ }
+    }
+
+    draw(cx, cy) {
+        const sx = this.x - cx, sy = this.y - cy;
+        const isChasing = this.state === 'chasing';
+
+        // View Cone
+        ctx.save();
+        ctx.globalAlpha = isChasing ? 0.3 : 0.1;
+        ctx.fillStyle = isChasing ? '#ff4444' : '#ffffff';
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.arc(sx, sy, this.config.viewDist, this.angle - this.config.viewAngle/2, this.angle + this.config.viewAngle/2);
+        ctx.fill();
+        ctx.restore();
+
+        // Entity
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(this.angle);
+        ctx.fillStyle = this.config.color;
+        if (this.config.hitbox === 'circle') {
+            ctx.beginPath(); ctx.arc(0,0,this.config.radius,0,Math.PI*2); ctx.fill();
+        } else {
+            ctx.fillRect(-this.config.width/2, -this.config.height/2, this.config.width, this.config.height);
+        }
+        ctx.restore();
+    }
+}
+
+        // --- Loop ---
+const player = new Player();
+const enemies = [
+    new Enemy(TILE_SIZE*15, TILE_SIZE*10, 'scout'),
+    new Enemy(TILE_SIZE*25, TILE_SIZE*25, 'tank'),
+    new Enemy(TILE_SIZE*5, TILE_SIZE*25, 'predator')
+];
+
+function loop() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    player.update();
+        let anyChasing = false;
+        enemies.forEach(e => {
+            e.update(player);
+            if (e.state === 'chasing') anyChasing = true;
+        });
+
+        const cx = player.x - canvas.width/2, cy = player.y - canvas.height/2;
+        ctx.fillStyle = '#050508'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Draw Map
+        ctx.fillStyle = '#1a1a25';
+        for(let y=0; y<GRID_HEIGHT; y++) {
+        for(let x=0; x<GRID_WIDTH; x++) {
+            if (WORLD_MAP[y][x] === 1) ctx.fillRect(x*TILE_SIZE-cx, y*TILE_SIZE-cy, TILE_SIZE, TILE_SIZE);
+        }
+    }
+
+    enemies.forEach(e => e.draw(cx, cy));
+    player.draw(cx, cy);
+
+    statusEl.textContent = anyChasing ? "DETECTED" : "HIDDEN";
+    statusEl.className = anyChasing ? "detected" : "hidden";
+
+    requestAnimationFrame(loop);
+}
+loop();
