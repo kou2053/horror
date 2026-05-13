@@ -47,6 +47,30 @@ body {
     animation: shake 0.2s infinite;
 }
 
+#status {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    z-index: 20;
+    padding: 10px 16px;
+    border: 2px solid #800000;
+    background: rgba(10, 10, 10, 0.85);
+    color: #ff6666;
+    font-family: 'Yuji Mai', cursive;
+    font-size: 18px;
+    text-transform: uppercase;
+}
+
+#status.detected {
+    color: #ff4444;
+    border-color: #ff4444;
+}
+
+#status.hidden {
+    color: #ffffff;
+    border-color: #999999;
+}
+
 @keyframes shake {
     0% { transform: translate(1px, 1px) rotate(0deg); }
     25% { transform: translate(-1px, -2px) rotate(-1deg); }
