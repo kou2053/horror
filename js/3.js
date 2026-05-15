@@ -582,6 +582,11 @@ class Player {
         let dx = 0, dz = 0;
         if (keys['KeyW'] || keys['ArrowUp']) dz -= 1; if (keys['KeyS'] || keys['ArrowDown']) dz += 1;
         if (keys['KeyA'] || keys['ArrowLeft']) dx -= 1; if (keys['KeyD'] || keys['ArrowRight']) dx += 1;
+        if (keys["ShiftLeft"]) {
+            this.speed = 0.5;
+        } else {
+            this.speed = 0.35;
+        }
         if (stickInput.active) { dx = stickInput.x; dz = stickInput.y; }
         const mag = Math.sqrt(dx*dx + dz*dz);
         if (mag > 0.1) {
@@ -589,114 +594,528 @@ class Player {
             if (!checkWallCollision(this.mesh.position.x + moveX, this.mesh.position.z, PLAYER_RADIUS)) this.mesh.position.x += moveX;
             if (!checkWallCollision(this.mesh.position.x, this.mesh.position.z + moveZ, PLAYER_RADIUS)) this.mesh.position.z += moveZ;
         }
+        // 足音
+        this.noiseRadius = 0;
+
+        if (mag > 0.1) {
+
+            if (keys["ShiftLeft"]) {
+                // 走る
+                this.noiseRadius = 18;
+            } else {
+                // 歩く
+                this.noiseRadius = 10;
+            }
+        }
     }
 }
 
-// Enemy クラス: 簡易ステートマシン（patrol/suspicious/chasing）と視界・A*追従
+// ===============================
+// Enemy クラス（リアルAI版）
+// ===============================
 class Enemy {
     constructor(x, z, color, dist, angleFov, speed, id) {
+
         this.id = id;
+
         this.startPos = { x, z };
-        this.mesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2, 1.8), new THREE.MeshPhongMaterial({ color: color }));
+
+        this.mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(1.2, 2, 1.8),
+            new THREE.MeshPhongMaterial({ color: color })
+        );
+
         this.mesh.position.set(x, 1, z);
+
         scene.add(this.mesh);
-        this.config = { viewDist: dist, viewAngle: angleFov, speed: speed };
-        this.angle = 0; this.state = 'patrol'; this.path = []; this.pathTimer = 0;
+
+        this.config = {
+            viewDist: dist,
+            viewAngle: angleFov,
+            speed: speed
+        };
+
+        this.angle = 0;
+
+        // ===============================
+        // AI STATE
+        // patrol
+        // suspicious
+        // chasing
+        // search
+        // ===============================
+        this.state = "patrol";
+
+        this.path = [];
+
+        this.pathTimer = 0;
+
         this.losTimer = 0;
-        this.vision = new THREE.Mesh(new THREE.CircleGeometry(dist, 24, -angleFov/2, angleFov), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.15, side: THREE.DoubleSide }));
+
+        // 最後に見た位置
+        this.lastKnownPos = null;
+
+        // 調査待機
+        this.searchTimer = 0;
+
+        // 巡回ポイント
+        this.patrolPoints = [
+            { x: 5, z: 5 },
+            { x: 30, z: 8 },
+            { x: 28, z: 30 },
+            { x: 8, z: 28 }
+        ];
+
+        this.currentPatrol = Math.floor(
+            Math.random() * this.patrolPoints.length
+        );
+
+        // 視界
+        this.vision = new THREE.Mesh(
+            new THREE.CircleGeometry(
+                dist,
+                24,
+                -angleFov / 2,
+                angleFov
+            ),
+            new THREE.MeshBasicMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.15,
+                side: THREE.DoubleSide
+            })
+        );
+
         this.vision.rotation.x = -Math.PI / 2;
+
         scene.add(this.vision);
     }
-    // 初期状態へ戻す
-    reset() {
-        this.mesh.position.set(this.startPos.x, 1, this.startPos.z);
-        this.state = 'patrol';
-        this.path = [];
-        this.losTimer = 0;
-    }
-    // フレーム毎の AI 更新: 視界判定・状態遷移・経路追従
-    update(player, deltaTime) {
-        const enemyPos = this.mesh.position;
-        const playerPos = player.mesh.position;
-        const distToPlayer = enemyPos.distanceTo(playerPos);
-        
-        const dirToPlayer = new THREE.Vector3().subVectors(playerPos, enemyPos).normalize();
-        const currentDir = new THREE.Vector3(Math.cos(this.angle), 0, Math.sin(this.angle));
-        const angleToPlayer = currentDir.angleTo(dirToPlayer);
-        
-        // 壁による遮蔽判定（レイを投げる）
-        const ray = new THREE.Raycaster(enemyPos, dirToPlayer, 0, distToPlayer);
-        const wallIntersects = ray.intersectObjects(wallObjects);
-        const isBlockedByWall = wallIntersects.length > 0;
-        const isVisible = !isBlockedByWall && distToPlayer < this.config.viewDist && angleToPlayer < this.config.viewAngle/2;
 
-        if (this.state === 'patrol') {
-            // 巡回中: 視野色を通常にしロスタイマーリセット
-            this.vision.material.color.setHex(0xffffff);
-            this.losTimer = 0;
-            if (isVisible) this.state = 'chasing';
-            if (this.path.length === 0) {
-                // ランダムな巡回目的地を選び A* で経路を取得
-                const tx = Math.floor(2 + Math.random() * 36), tz = Math.floor(2 + Math.random() * 36);
-                if (WORLD_MAP[tz][tx] === 0) this.path = findPath({x: Math.floor(enemyPos.x/TILE_SIZE), z: Math.floor(enemyPos.z/TILE_SIZE)}, {x: tx, z: tz});
+    reset() {
+
+        this.mesh.position.set(
+            this.startPos.x,
+            1,
+            this.startPos.z
+        );
+
+        this.state = "patrol";
+
+        this.path = [];
+
+        this.losTimer = 0;
+
+        this.lastKnownPos = null;
+
+        this.searchTimer = 0;
+    }
+
+    update(player, deltaTime) {
+
+        const enemyPos = this.mesh.position;
+
+        const playerPos = player.mesh.position;
+
+        const distToPlayer =
+            enemyPos.distanceTo(playerPos);
+
+        // ===============================
+        // 視界判定
+        // ===============================
+
+        const dirToPlayer =
+            new THREE.Vector3()
+                .subVectors(playerPos, enemyPos)
+                .normalize();
+
+        const currentDir =
+            new THREE.Vector3(
+                Math.cos(this.angle),
+                0,
+                Math.sin(this.angle)
+            );
+
+        const angleToPlayer =
+            currentDir.angleTo(dirToPlayer);
+
+        const ray = new THREE.Raycaster(
+            enemyPos,
+            dirToPlayer,
+            0,
+            distToPlayer
+        );
+
+        const wallIntersects =
+            ray.intersectObjects(wallObjects);
+
+        const isBlockedByWall =
+            wallIntersects.length > 0;
+
+        const isVisible =
+            !isBlockedByWall &&
+            distToPlayer < this.config.viewDist &&
+            angleToPlayer < this.config.viewAngle / 2;
+
+        // ===============================
+        // 足音判定
+        // ===============================
+
+        const heardPlayer =
+            distToPlayer < player.noiseRadius;
+
+        // ===============================
+        // patrol
+        // ===============================
+
+        if (this.state === "patrol") {
+
+            this.vision.material.color.setHex(
+                0xffffff
+            );
+
+            // 音を聞いた
+            if (heardPlayer) {
+
+                this.state = "suspicious";
+
+                this.lastKnownPos =
+                    playerPos.clone();
             }
-        } else if (this.state === 'chasing') {
-            // 追跡中: 視野色を赤にし、ロスト処理や再経路計算を行う
-            this.vision.material.color.setHex(0xff3333);
-            const maxChaseDist = this.config.viewDist * 1.5;
-            if (distToPlayer > maxChaseDist) {
-                // 遠すぎたら巡回に戻す
-                this.state = 'patrol'; this.path = []; this.losTimer = 0;
-            } else if (isBlockedByWall) {
-                // 視界が遮られている場合はロスタイマーを進め、閾値で巡回へ
+
+            // 発見
+            if (isVisible) {
+
+                this.state = "chasing";
+
+                this.lastKnownPos =
+                    playerPos.clone();
+
+                // 仲間に共有
+                enemies.forEach(other => {
+
+                    if (other !== this) {
+
+                        const d =
+                            other.mesh.position.distanceTo(
+                                enemyPos
+                            );
+
+                        if (d < 25) {
+
+                            other.state =
+                                "suspicious";
+
+                            other.lastKnownPos =
+                                playerPos.clone();
+                        }
+                    }
+                });
+            }
+
+            // 巡回
+            if (this.path.length === 0) {
+
+                const target =
+                    this.patrolPoints[
+                        this.currentPatrol
+                    ];
+
+                this.path = findPath(
+                    {
+                        x: Math.floor(
+                            enemyPos.x / TILE_SIZE
+                        ),
+                        z: Math.floor(
+                            enemyPos.z / TILE_SIZE
+                        )
+                    },
+                    target
+                );
+            }
+        }
+
+        // ===============================
+        // suspicious
+        // ===============================
+
+        else if (this.state === "suspicious") {
+
+            this.vision.material.color.setHex(
+                0xffff00
+            );
+
+            if (isVisible) {
+
+                this.state = "chasing";
+
+                this.lastKnownPos =
+                    playerPos.clone();
+            }
+
+            // 調査地点到達
+            if (
+                this.lastKnownPos &&
+                enemyPos.distanceTo(
+                    this.lastKnownPos
+                ) < 2
+            ) {
+
+                this.state = "search";
+
+                this.searchTimer = 2000;
+            }
+        }
+
+        // ===============================
+        // search
+        // ===============================
+
+        else if (this.state === "search") {
+
+            this.vision.material.color.setHex(
+                0xff8800
+            );
+
+            this.searchTimer -= deltaTime;
+
+            // 左右見る
+            this.angle +=
+                Math.sin(
+                    performance.now() * 0.003
+                ) * 0.02;
+
+            if (isVisible) {
+
+                this.state = "chasing";
+
+                this.lastKnownPos =
+                    playerPos.clone();
+            }
+
+            if (this.searchTimer <= 0) {
+
+                this.state = "patrol";
+
+                this.path = [];
+            }
+        }
+
+        // ===============================
+        // chasing
+        // ===============================
+
+        else if (this.state === "chasing") {
+
+            this.vision.material.color.setHex(
+                0xff3333
+            );
+
+            this.lastKnownPos =
+                playerPos.clone();
+
+            // 見失った
+            if (isBlockedByWall) {
+
                 this.losTimer += deltaTime;
-                if (this.losTimer >= LOS_TIMEOUT_MS) { this.state = 'patrol'; this.path = []; this.losTimer = 0; }
+
+                if (
+                    this.losTimer >=
+                    LOS_TIMEOUT_MS
+                ) {
+
+                    this.state = "suspicious";
+
+                    this.path = [];
+
+                    this.losTimer = 0;
+                }
+
             } else {
-                // 見えていればロスタイマーをリセット
+
                 this.losTimer = 0;
             }
-            // 経路再計算の頻度制御
+
+            // 遠すぎ
+            const maxChaseDist =
+                this.config.viewDist * 1.8;
+
+            if (
+                distToPlayer > maxChaseDist
+            ) {
+
+                this.state = "suspicious";
+            }
+
+            // 経路更新
             if (this.pathTimer++ > 20) {
-                this.path = findPath({x: Math.floor(enemyPos.x/TILE_SIZE), z: Math.floor(enemyPos.z/TILE_SIZE)}, {x: Math.floor(playerPos.x/TILE_SIZE), z: Math.floor(playerPos.z/TILE_SIZE)});
+
+                this.path = findPath(
+                    {
+                        x: Math.floor(
+                            enemyPos.x / TILE_SIZE
+                        ),
+                        z: Math.floor(
+                            enemyPos.z / TILE_SIZE
+                        )
+                    },
+                    {
+                        x: Math.floor(
+                            playerPos.x / TILE_SIZE
+                        ),
+                        z: Math.floor(
+                            playerPos.z / TILE_SIZE
+                        )
+                    }
+                );
+
                 this.pathTimer = 0;
             }
         }
 
-        // 目標座標を決定（近ければ直接プレイヤーを目標、それ以外は経路の次ノード）
+        // ===============================
+        // 移動処理
+        // ===============================
+
         let targetPos = null;
-        if (this.state === 'chasing' && distToPlayer < TILE_SIZE * 1.5) {
-            targetPos = playerPos;
-        } else if (this.path && this.path.length > 0) {
-            const currentGridX = Math.floor(enemyPos.x/TILE_SIZE), currentGridZ = Math.floor(enemyPos.z/TILE_SIZE);
-            if (this.path[0].x === currentGridX && this.path[0].z === currentGridZ) this.path.shift();
-            if (this.path.length > 0) targetPos = new THREE.Vector3(this.path[0].x * TILE_SIZE + TILE_SIZE/2, 1, this.path[0].z * TILE_SIZE + TILE_SIZE/2);
+
+        // suspicious
+        if (
+            this.state === "suspicious" &&
+            this.lastKnownPos
+        ) {
+
+            targetPos = this.lastKnownPos;
         }
 
-        // 目標があれば向きを滑らかに回転させて前進する
-        if (targetPos) {
-            const moveVec = new THREE.Vector3().subVectors(targetPos, enemyPos);
-            const targetAngle = Math.atan2(moveVec.z, moveVec.x);
-            let diff = targetAngle - this.angle;
-            while(diff < -Math.PI) diff += Math.PI*2;
-            while(diff > Math.PI) diff -= Math.PI*2;
-            const TURN_SPEED = 0.03;
+        // chasing
+        else if (
+            this.state === "chasing" &&
+            distToPlayer <
+            TILE_SIZE * 1.5
+        ) {
 
-if (diff > TURN_SPEED) diff = TURN_SPEED;
-if (diff < -TURN_SPEED) diff = -TURN_SPEED;
+            targetPos = playerPos;
+        }
 
-this.angle += diff;
-            if (Math.abs(diff) < 0.5) {
-                const s = this.config.speed;
-                enemyPos.x += Math.cos(this.angle) * s; enemyPos.z += Math.sin(this.angle) * s;
+        // path移動
+        else if (
+            this.path &&
+            this.path.length > 0
+        ) {
+
+            const currentGridX =
+                Math.floor(
+                    enemyPos.x / TILE_SIZE
+                );
+
+            const currentGridZ =
+                Math.floor(
+                    enemyPos.z / TILE_SIZE
+                );
+
+            if (
+                this.path[0].x === currentGridX &&
+                this.path[0].z === currentGridZ
+            ) {
+
+                this.path.shift();
+
+                // 巡回更新
+                if (
+                    this.state === "patrol" &&
+                    this.path.length === 0
+                ) {
+
+                    this.currentPatrol =
+                        (
+                            this.currentPatrol + 1
+                        ) %
+                        this.patrolPoints.length;
+                }
+            }
+
+            if (this.path.length > 0) {
+
+                targetPos =
+                    new THREE.Vector3(
+                        this.path[0].x *
+                        TILE_SIZE +
+                        TILE_SIZE / 2,
+
+                        1,
+
+                        this.path[0].z *
+                        TILE_SIZE +
+                        TILE_SIZE / 2
+                    );
             }
         }
-        // 見た目反映（回転・視野の位置/角度）
-        this.mesh.rotation.y = -this.angle;
-        this.vision.position.set(enemyPos.x, 0.2, enemyPos.z);
-        this.vision.rotation.z = -this.angle;
 
-        // 状態情報を返す（上位で描画や当たり判定に利用）
-        return { id: this.id, losTimer: this.losTimer, state: this.state, dist: distToPlayer };
+        // ===============================
+        // 実移動
+        // ===============================
+
+        if (targetPos) {
+
+            const moveVec =
+                new THREE.Vector3()
+                    .subVectors(
+                        targetPos,
+                        enemyPos
+                    );
+
+            const targetAngle =
+                Math.atan2(
+                    moveVec.z,
+                    moveVec.x
+                );
+
+            let diff =
+                targetAngle - this.angle;
+
+            while (diff < -Math.PI)
+                diff += Math.PI * 2;
+
+            while (diff > Math.PI)
+                diff -= Math.PI * 2;
+
+            this.angle += diff * 0.1;
+
+            if (Math.abs(diff) < 0.5) {
+
+                const s =
+                    this.config.speed;
+
+                enemyPos.x +=
+                    Math.cos(this.angle) * s;
+
+                enemyPos.z +=
+                    Math.sin(this.angle) * s;
+            }
+        }
+
+        // ===============================
+        // 見た目更新
+        // ===============================
+
+        this.mesh.rotation.y =
+            -this.angle;
+
+        this.vision.position.set(
+            enemyPos.x,
+            0.2,
+            enemyPos.z
+        );
+
+        this.vision.rotation.z =
+            -this.angle;
+
+        return {
+            id: this.id,
+            losTimer: this.losTimer,
+            state: this.state,
+            dist: distToPlayer
+        };
     }
 }
 
