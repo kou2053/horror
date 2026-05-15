@@ -42,26 +42,55 @@ let selectBox = null;
 let selectbuttom1 = null;
 let selectbuttom2 = null;
 let typeTimer = null;
+let autoStartTimer = null;
 
 //イベント
+let started = false;
+
 start.addEventListener("click", function() {
+    if(started) return;
+    started = true;
+
     start.style.animation = "shake 0.2s infinite";
     startanimation();
 });
 
 canvas.addEventListener("click", (e) => {
-    if (charaselect){
+
+    if(charaselect){
+
         const rect = canvas.getBoundingClientRect();
+
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        if (x >= 300 && x <= 600 && y >= 100 && y <= 700) {
-            selecting("はい","いいえ","これでいいですか",1);
+        if (
+            x >= 300 && x <= 600 &&
+            y >= 100 && y <= 700
+        ) {
+
+            selecting(
+                "はい",
+                "いいえ",
+                "これでいいですか",
+                1
+            );
+
             charaselect = false;
         }
 
-        if (x >= 900 && x <= 1200 && y >= 100 && y <= 700) {
-            selecting("はい","いいえ","これでいいですか",2);
+        if (
+            x >= 900 && x <= 1200 &&
+            y >= 100 && y <= 700
+        ) {
+
+            selecting(
+                "はい",
+                "いいえ",
+                "これでいいですか",
+                2
+            );
+
             charaselect = false;
         }
     }
@@ -97,22 +126,26 @@ function startanimation(){
         start.style.display = "none";
     }else if (count == 4){
         flashwait = 3
-        start.textContent = "邨らч";
+        start.textContent = "邨らち";
         start.style.display = "block";
     }else if (count == 5){
         flashwait = 2
         start.textContent = "豁ｻ";
     }else if (count == 6){
+        start.style.display = "none";
         start.textContent = "start";
     }
 
-    if (flash <= 100){
-        requestAnimationFrame(startanimation);
+    if (count < 6){
+
+    requestAnimationFrame(startanimation);
+
+    }else{
+        start.style.display = "none";
+        characterselection();
     }
     
-    if (flash > 100){
-        characterselection();
-    }else if (flash > 50){
+    if (flash > 50){
        start.style.display = "none";
     }
 }
@@ -126,15 +159,19 @@ function characterselection() {
     ctx.fillRect(300, 100, 300, 600);
     ctx.fillRect(900, 100, 300, 600);
 
-    document.fonts.ready.then(() => {
-        ctx.font = "40px 'Yuji Mai', cursive";
-        ctx.fillStyle = "#ff6666";
-        ctx.shadowColor = "#ff0000";
-        ctx.shadowBlur = 15;
-        ctx.textAlign = "center";
-        ctx.fillText("自分を選ぶ", 750, 100);
-        ctx.restore();
-    });
+document.fonts.ready.then(() => {
+    ctx.save();
+
+    ctx.font = "40px 'Yuji Mai', cursive";
+    ctx.fillStyle = "#ff6666";
+    ctx.shadowColor = "#ff0000";
+    ctx.shadowBlur = 15;
+    ctx.textAlign = "center";
+
+    ctx.fillText("自分を選ぶ", 750, 100);
+
+    ctx.restore();
+});
 }
 
 function selecting(text1,text2,explanation,caseType) {
@@ -244,12 +281,19 @@ function selecting(text1,text2,explanation,caseType) {
     document.body.appendChild(messageBox);
 }
 
-function startRPG() {
-    // 画面が黒のまま終わっている場合があるので、必要なら背景を塗りつぶす
+function startRPG(){
+
     ctx.fillStyle = "black";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillRect(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
 
     createMessageBox();
+
     showNextLine();
 }
 
@@ -301,8 +345,16 @@ function createMessageBox() {
 // 次の行を表示
 function showNextLine() {
     if (currentLine >= scenario.length) {
-        messageBox.remove();
-        gameLoop(0);
+        if(messageBox && messageBox.parentNode){
+            messageBox.remove();
+        }
+
+        canvas.style.display = "none";
+        renderer.domElement.style.zIndex = "1";
+
+        lastTime = performance.now();
+        requestAnimationFrame(loop);
+
         return;
     }
 
@@ -325,12 +377,27 @@ function typeWriter() {
         charIndex++;
         typeTimer = setTimeout(typeWriter, 50); 
     } else {
-        isTyping = false; 
+        isTyping = false;
+        if (autoStartTimer) {
+            clearTimeout(autoStartTimer);
+            autoStartTimer = null;
+        }
+        if (currentLine === scenario.length - 1) {
+            autoStartTimer = setTimeout(() => {
+                currentLine++;
+                showNextLine();
+            }, 1500);
+        }
     }
 }
 
 // クリック時の挙動
 function handleClick() {
+    if (autoStartTimer) {
+        clearTimeout(autoStartTimer);
+        autoStartTimer = null;
+    }
+
     if (isTyping) {
         clearTimeout(typeTimer);
         textBox.innerText = scenario[currentLine].text;
@@ -341,295 +408,385 @@ function handleClick() {
     }
 }
 
-//ゲームプレイ時の処理
-let lastTime = 0;
-let accumulator = 0;
-const timeStep = 1000 / 60;
-
-// --- Configuration ---
-const TILE_SIZE = 64;
+// ゲームプレイ処理開始（このセクションはマップ、AI、プレイヤー、メインループを含みます）
+// --- 基本設定 ---
+// 1: 1グリッドの大きさ（ワールド単位）
+const TILE_SIZE = 4;
+// 2: マップの幅（グリッド数）
 const GRID_WIDTH = 40;
+// 3: マップの高さ（グリッド数）
 const GRID_HEIGHT = 40;
-const ASTAR_ITERATION_LIMIT = 500; 
+// 4: プレイヤー当たり判定半径
+const PLAYER_RADIUS = 0.6;
+// 5: カメラのプレイヤー相対オフセット
+const CAM_OFFSET = new THREE.Vector3(0, 35, 15);
+// 6: 視界ロスト後に敵が追跡を止めるまでの時間（ミリ秒）
+const LOS_TIMEOUT_MS = 5000;
+// 7: 敵に捕まったと判定する距離（中心間）
+const CAPTURE_DIST = 1.2; // 捕まる距離（プレイヤーと敵の中心距離）
 
+// 8: グリッド表現のマップ（0=通路,1=壁）を初期化
 const WORLD_MAP = Array.from({ length: GRID_HEIGHT }, () => Array(GRID_WIDTH).fill(0));
-
-// Setup Map
-for(let i=0; i<GRID_WIDTH; i++) { WORLD_MAP[0][i] = 1; WORLD_MAP[GRID_HEIGHT-1][i] = 1; }
-for(let i=0; i<GRID_HEIGHT; i++) { WORLD_MAP[i][0] = 1; WORLD_MAP[i][GRID_WIDTH-1] = 1; }
-        
+// 9: 矩形領域を壁化するヘルパー関数
 function addWallRect(x, y, w, h) {
+    // 縦ループ
     for(let i=y; i<y+h; i++) {
+        // 横ループ
         for(let j=x; j<x+w; j++) {
+            // 範囲チェックして壁に設定
             if(WORLD_MAP[i] && WORLD_MAP[i][j] !== undefined) WORLD_MAP[i][j] = 1;
         }
     }
 }
+// 10: 外周を壁にする（上・下）
+for(let i=0; i<GRID_WIDTH; i++) { WORLD_MAP[0][i] = 1; WORLD_MAP[GRID_HEIGHT-1][i] = 1; }
+// 11: 外周を壁にする（左・右）
+for(let i=0; i<GRID_HEIGHT; i++) { WORLD_MAP[i][0] = 1; WORLD_MAP[i][GRID_WIDTH-1] = 1; }
+// 12〜16: サンプルの矩形壁を追加（ステージ形状）
 addWallRect(10, 5, 2, 10);
 addWallRect(5, 15, 15, 2);
 addWallRect(20, 10, 5, 5);
+addWallRect(20, 25, 10, 2);
+addWallRect(5, 25, 2, 10);
 
+// 17: THREE.js シーン/CAM/レンダラーの初期化
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050508);
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.domElement.style.position = "fixed";
+renderer.domElement.style.top = "0";
+renderer.domElement.style.left = "0";
+// レンダラーは最初 UI を妨げないよう背面に置く
+renderer.domElement.style.zIndex = "-1";
+document.body.appendChild(renderer.domElement);
+
+// 18: 照明を追加
+scene.add(new THREE.AmbientLight(0x404040, 1.2));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+dirLight.position.set(10, 20, 10);
+scene.add(dirLight);
+
+// A* 経路探索
+// findPath(startGrid,endGrid): グリッド座標の最短経路を返す（上下左右4方向）
+function findPath(startGrid, endGrid) {
+    // 開始==終了なら空経路
+    if (startGrid.x === endGrid.x && startGrid.z === endGrid.z) return [];
+    const openList = [];
+    const closedSet = new Set();
+    // 開始ノード（g=0, h=マンハッタン距離）
+    const startNode = { x: startGrid.x, z: startGrid.z, g: 0, h: Math.abs(startGrid.x - endGrid.x) + Math.abs(startGrid.z - endGrid.z), parent: null };
+    startNode.f = startNode.g + startNode.h;
+    openList.push(startNode);
+    let iterations = 0;
+    // 探索ループ（安全のため反復上限あり）
+    while (openList.length > 0 && iterations++ < 500) {
+        // f が最小のノードを選ぶ
+        let currentIdx = 0;
+        for (let i = 1; i < openList.length; i++) if (openList[i].f < openList[currentIdx].f) currentIdx = i;
+        const current = openList[currentIdx];
+        // 目的地に到達したら親ポインタを辿って経路復元
+        if (current.x === endGrid.x && current.z === endGrid.z) {
+            const path = []; let temp = current;
+            while (temp) { path.push({ x: temp.x, z: temp.z }); temp = temp.parent; }
+            return path.reverse();
+        }
+        // 現ノードをオープンから除外しクローズに追加
+        openList.splice(currentIdx, 1);
+        closedSet.add(`${current.x},${current.z}`);
+        const neighbors = [{x: 0, z: 1}, {x: 0, z: -1}, {x: 1, z: 0}, {x: -1, z: 0}];
+        for (const neighbor of neighbors) {
+            const nx = current.x + neighbor.x, nz = current.z + neighbor.z;
+            // 範囲外・壁・既評価ノードはスキップ
+            if (nx < 0 || nx >= GRID_WIDTH || nz < 0 || nz >= GRID_HEIGHT || WORLD_MAP[nz][nx] === 1 || closedSet.has(`${nx},${nz}`)) continue;
+            const gScore = current.g + 1;
+            let neighborNode = openList.find(n => n.x === nx && n.z === nz);
+            if (!neighborNode) {
+                neighborNode = { x: nx, z: nz, g: gScore, h: Math.abs(nx - endGrid.x) + Math.abs(nz - endGrid.z), parent: current };
+                neighborNode.f = neighborNode.g + neighborNode.h;
+                openList.push(neighborNode);
+            } else if (gScore < neighborNode.g) {
+                neighborNode.g = gScore; neighborNode.f = neighborNode.g + neighborNode.h; neighborNode.parent = current;
+            }
+        }
+    }
+    // 経路が見つからなければ空配列
+    return [];
+}
+
+// 衝突判定: ワールド座標 (x,z) が壁セルかどうかを判定
+function checkWallCollision(x, z, radius) {
+    const gx = Math.floor(x / TILE_SIZE), gz = Math.floor(z / TILE_SIZE);
+    if (gx < 0 || gx >= GRID_WIDTH || gz < 0 || gz >= GRID_HEIGHT || WORLD_MAP[gz][gx] === 1) return true;
+    return false;
+}
+
+// 入力管理: キーボード状態オブジェクト
 const keys = {};
 window.addEventListener('keydown', e => keys[e.code] = true);
 window.addEventListener('keyup', e => keys[e.code] = false);
 
-// --- Logic Utilities ---
-function getDistance(a, b) {
-    return Math.sqrt((a.x - b.x)**2 + (a.y - b.y)**2);
+// タッチ用スティック（UI 要素がページにあれば連動）
+const joystickContainer = document.getElementById('joystick-container');
+const joystickKnob = document.getElementById('joystick-knob');
+let stickInput = { x: 0, y: 0, active: false };
+if ('ontouchstart' in window) {
+    // タッチ環境ならスティックを表示・イベント登録
+    joystickContainer.style.display = 'block';
+    joystickContainer.addEventListener('touchstart', () => stickInput.active = true);
+    window.addEventListener('touchmove', (e) => {
+        if (!stickInput.active) return;
+        const rect = joystickContainer.getBoundingClientRect();
+        const dx = e.touches[0].clientX - (rect.left + 50), dy = e.touches[0].clientY - (rect.top + 50);
+        const dist = Math.min(50, Math.sqrt(dx*dx + dy*dy));
+        const angle = Math.atan2(dy, dx);
+        stickInput.x = (Math.cos(angle) * dist) / 50; stickInput.y = (Math.sin(angle) * dist) / 50;
+        joystickKnob.style.transform = `translate(calc(-50% + ${Math.cos(angle) * dist}px), calc(-50% + ${Math.sin(angle) * dist}px))`;
+    });
+    window.addEventListener('touchend', () => { stickInput.active = false; stickInput.x = 0; stickInput.y = 0; joystickKnob.style.transform = 'translate(-50%, -50%)'; });
 }
 
-function hasLineOfSight(from, to) {
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const dist = Math.sqrt(dx*dx + dy*dy);
-    const stepSize = 10;
-    const steps = dist / stepSize;
-    for (let i = 1; i < steps; i++) {
-        const px = from.x + (dx * (i / steps));
-        const py = from.y + (dy * (i / steps));
-        const gx = Math.floor(px / TILE_SIZE);
-        const gy = Math.floor(py / TILE_SIZE);
-        if (WORLD_MAP[gy] && WORLD_MAP[gy][gx] === 1) return false;
-    }
-    return true;
-}
-
-function findPath(start, target) {
-    const sx = Math.floor(start.x / TILE_SIZE);
-    const sy = Math.floor(start.y / TILE_SIZE);
-    const tx = Math.floor(target.x / TILE_SIZE);
-    const ty = Math.floor(target.y / TILE_SIZE);
-
-    if (tx < 0 || tx >= GRID_WIDTH || ty < 0 || ty >= GRID_HEIGHT || WORLD_MAP[ty][tx] === 1) return [];
-    if (sx === tx && sy === ty) return [];
-
-    const openSet = [{ x: sx, y: sy, g: 0, f: 0, parent: null }];
-    const closedSet = new Map();
-    let iterations = 0;
-
-    while (openSet.length > 0) {
-        if (iterations++ > ASTAR_ITERATION_LIMIT) break;
-        openSet.sort((a, b) => a.f - b.f);
-        const current = openSet.shift();
-        const key = `${current.x},${current.y}`;
-
-        if (current.x === tx && current.y === ty) {
-            const path = [];
-            let temp = current;
-            while (temp.parent) {
-                path.push({ x: temp.x * TILE_SIZE + TILE_SIZE/2, y: temp.y * TILE_SIZE + TILE_SIZE/2 });
-                temp = temp.parent;
-            }
-            return path.reverse();
-        }
-
-        closedSet.set(key, current.g);
-        const neighbors = [
-            {x:0, y:1, c:1}, {x:0, y:-1, c:1}, {x:1, y:0, c:1}, {x:-1, y:0, c:1},
-            {x:1, y:1, c:1.41}, {x:1, y:-1, c:1.41}, {x:-1, y:1, c:1.41}, {x:-1, y:-1, c:1.41}
-        ];
-
-        for (const d of neighbors) {
-            const nx = current.x + d.x, ny = current.y + d.y;
-            if (nx < 0 || nx >= GRID_WIDTH || ny < 0 || ny >= GRID_HEIGHT || WORLD_MAP[ny][nx] === 1) continue;
-            if (d.c > 1 && (WORLD_MAP[current.y][nx] === 1 || WORLD_MAP[ny][current.x] === 1)) continue;
-            const g = current.g + d.c;
-            const nKey = `${nx},${ny}`;
-            if (closedSet.has(nKey) && closedSet.get(nKey) <= g) continue;
-            const h = Math.abs(nx - tx) + Math.abs(ny - ty);
-            const existing = openSet.find(o => o.x === nx && o.y === ny);
-            if (!existing) {
-                openSet.push({ x: nx, y: ny, g, f: g + h, parent: current });
-            } else if (g < existing.g) {
-                existing.g = g;
-                existing.f = g + h;
-                existing.parent = current;
-            }
+// 壁メッシュ作成と保持配列
+const wallMat = new THREE.MeshPhongMaterial({ color: 0x1a1a25 });
+const wallObjects = [];
+for(let z=0; z<GRID_HEIGHT; z++) {
+    for(let x=0; x<GRID_WIDTH; x++) {
+        if (WORLD_MAP[z][x] === 1) {
+            const wall = new THREE.Mesh(new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE * 1.5, TILE_SIZE), wallMat);
+            wall.position.set(x * TILE_SIZE + TILE_SIZE/2, TILE_SIZE * 0.75, z * TILE_SIZE + TILE_SIZE/2);
+            scene.add(wall);
+            wallObjects.push(wall);
         }
     }
-    return [];
 }
+// 床メッシュ（ステージ）を追加
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(GRID_WIDTH*TILE_SIZE, GRID_HEIGHT*TILE_SIZE), new THREE.MeshPhongMaterial({ color: 0x0a0a0f }));
+floor.rotation.x = -Math.PI/2; floor.position.set(GRID_WIDTH*TILE_SIZE/2, 0, GRID_HEIGHT*TILE_SIZE/2);
+scene.add(floor);
 
-function checkCollision(player, enemy) {
-    if (enemy.config.hitbox === 'circle') {
-        return getDistance(player, enemy) < (player.radius + enemy.config.radius);
-    } else {
-        let cx = player.x - enemy.x;
-        let cy = player.y - enemy.y;
-        const cos = Math.cos(-enemy.angle), sin = Math.sin(-enemy.angle);
-        const rx = cx * cos - cy * sin, ry = cx * sin + cy * cos;
-        const closestX = Math.max(-enemy.config.width/2, Math.min(rx, enemy.config.width/2));
-        const closestY = Math.max(-enemy.config.height/2, Math.min(ry, enemy.config.height/2));
-        return Math.sqrt((rx - closestX)**2 + (ry - closestY)**2) < player.radius;
-    }
-}
-
-// --- Entities ---
+// Player クラス: プレイヤーの見た目・移動ロジック
 class Player {
     constructor() {
-        this.x = TILE_SIZE * 2.5; this.y = TILE_SIZE * 2.5;
-        this.radius = 16; this.speed = 5;
+        this.mesh = new THREE.Mesh(new THREE.SphereGeometry(0.8, 16, 16), new THREE.MeshPhongMaterial({ color: 0x00f2ff, emissive: 0x00f2ff, emissiveIntensity: 0.4 }));
+        this.reset();
+        scene.add(this.mesh);
+        this.speed = 0.35;
     }
+    // 初期位置に戻す
+    reset() {
+        this.mesh.position.set(TILE_SIZE * 2.5, 0.8, TILE_SIZE * 2.5);
+    }
+    // フレーム毎の入力処理と移動
     update() {
-        let dx = 0, dy = 0;
-        if (keys['KeyW'] || keys['ArrowUp']) dy -= 1;
-        if (keys['KeyS'] || keys['ArrowDown']) dy += 1;
-        if (keys['KeyA'] || keys['ArrowLeft']) dx -= 1;
-        if (keys['KeyD'] || keys['ArrowRight']) dx += 1;
-        if (dx !== 0 && dy !== 0) { dx *= 0.707; dy *= 0.707; }
-        const nx = this.x + dx * this.speed, ny = this.y + dy * this.speed;
-        if (WORLD_MAP[Math.floor(this.y/TILE_SIZE)][Math.floor(nx/TILE_SIZE)] === 0) this.x = nx;
-        if (WORLD_MAP[Math.floor(ny/TILE_SIZE)][Math.floor(this.x/TILE_SIZE)] === 0) this.y = ny;
-    }
-    draw(cx, cy) {
-        ctx.fillStyle = '#00f2ff';
-        ctx.beginPath(); ctx.arc(this.x - cx, this.y - cy, this.radius, 0, Math.PI*2); ctx.fill();
+        let dx = 0, dz = 0;
+        if (keys['KeyW'] || keys['ArrowUp']) dz -= 1; if (keys['KeyS'] || keys['ArrowDown']) dz += 1;
+        if (keys['KeyA'] || keys['ArrowLeft']) dx -= 1; if (keys['KeyD'] || keys['ArrowRight']) dx += 1;
+        if (stickInput.active) { dx = stickInput.x; dz = stickInput.y; }
+        const mag = Math.sqrt(dx*dx + dz*dz);
+        if (mag > 0.1) {
+            const moveX = (dx/mag) * this.speed, moveZ = (dz/mag) * this.speed;
+            if (!checkWallCollision(this.mesh.position.x + moveX, this.mesh.position.z, PLAYER_RADIUS)) this.mesh.position.x += moveX;
+            if (!checkWallCollision(this.mesh.position.x, this.mesh.position.z + moveZ, PLAYER_RADIUS)) this.mesh.position.z += moveZ;
+        }
     }
 }
 
+// Enemy クラス: 簡易ステートマシン（patrol/suspicious/chasing）と視界・A*追従
 class Enemy {
-    constructor(x, y, type, offset) {
-        this.x = x; this.y = y; this.type = type;
-        this.angle = 0; this.state = 'patrol'; this.path = [];
-        this.updateOffset = offset;
-        const configs = {
-            scout: { speed: 3.2, viewDist: 250, viewAngle: Math.PI/1.5, color: '#00ffaa', hitbox: 'circle', radius: 15 },
-            tank: { speed: 1.5, viewDist: 400, viewAngle: Math.PI*2, color: '#ffcc00', hitbox: 'rect', width: 50, height: 50 },
-            predator: { speed: 4.2, viewDist: 350, viewAngle: Math.PI/4, color: '#ff3366', hitbox: 'rect', width: 80, height: 25 }
-        };
-        this.config = configs[type];
+    constructor(x, z, color, dist, angleFov, speed, id) {
+        this.id = id;
+        this.startPos = { x, z };
+        this.mesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2, 1.8), new THREE.MeshPhongMaterial({ color: color }));
+        this.mesh.position.set(x, 1, z);
+        scene.add(this.mesh);
+        this.config = { viewDist: dist, viewAngle: angleFov, speed: speed };
+        this.angle = 0; this.state = 'patrol'; this.path = []; this.pathTimer = 0;
+        this.losTimer = 0;
+        this.vision = new THREE.Mesh(new THREE.CircleGeometry(dist, 24, -angleFov/2, angleFov), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.15, side: THREE.DoubleSide }));
+        this.vision.rotation.x = -Math.PI / 2;
+        scene.add(this.vision);
     }
-    update(player, frameCount) {
-        const dist = getDistance(this, player);
-        const angleTo = Math.atan2(player.y - this.y, player.x - this.x);
-        let diff = Math.abs(this.angle - angleTo);
-        while(diff > Math.PI) diff = Math.PI * 2 - diff;
-        const hasLoS = hasLineOfSight(this, player);
+    // 初期状態へ戻す
+    reset() {
+        this.mesh.position.set(this.startPos.x, 1, this.startPos.z);
+        this.state = 'patrol';
+        this.path = [];
+        this.losTimer = 0;
+    }
+    // フレーム毎の AI 更新: 視界判定・状態遷移・経路追従
+    update(player, deltaTime) {
+        const enemyPos = this.mesh.position;
+        const playerPos = player.mesh.position;
+        const distToPlayer = enemyPos.distanceTo(playerPos);
+        
+        const dirToPlayer = new THREE.Vector3().subVectors(playerPos, enemyPos).normalize();
+        const currentDir = new THREE.Vector3(Math.cos(this.angle), 0, Math.sin(this.angle));
+        const angleToPlayer = currentDir.angleTo(dirToPlayer);
+        
+        // 壁による遮蔽判定（レイを投げる）
+        const ray = new THREE.Raycaster(enemyPos, dirToPlayer, 0, distToPlayer);
+        const wallIntersects = ray.intersectObjects(wallObjects);
+        const isBlockedByWall = wallIntersects.length > 0;
+        const isVisible = !isBlockedByWall && distToPlayer < this.config.viewDist && angleToPlayer < this.config.viewAngle/2;
 
         if (this.state === 'patrol') {
-            if (dist < this.config.viewDist && diff < this.config.viewAngle/2 && hasLoS) {
-                this.state = 'chasing';
-            } else if (this.path.length === 0 && (frameCount + this.updateOffset) % 120 === 0) {
-                const rx = (1.5 + Math.floor(Math.random()*(GRID_WIDTH-3))) * TILE_SIZE;
-                const ry = (1.5 + Math.floor(Math.random()*(GRID_HEIGHT-3))) * TILE_SIZE;
-                this.path = findPath(this, {x:rx, y:ry});
+            // 巡回中: 視野色を通常にしロスタイマーリセット
+            this.vision.material.color.setHex(0xffffff);
+            this.losTimer = 0;
+            if (isVisible) this.state = 'chasing';
+            if (this.path.length === 0) {
+                // ランダムな巡回目的地を選び A* で経路を取得
+                const tx = Math.floor(2 + Math.random() * 36), tz = Math.floor(2 + Math.random() * 36);
+                if (WORLD_MAP[tz][tx] === 0) this.path = findPath({x: Math.floor(enemyPos.x/TILE_SIZE), z: Math.floor(enemyPos.z/TILE_SIZE)}, {x: tx, z: tz});
             }
         } else if (this.state === 'chasing') {
-            if (dist > this.config.viewDist * 1.8) {
-                this.state = 'patrol';
-                this.path = [];
-            } else if ((frameCount + this.updateOffset) % 30 === 0) {
-                this.path = findPath(this, player);
+            // 追跡中: 視野色を赤にし、ロスト処理や再経路計算を行う
+            this.vision.material.color.setHex(0xff3333);
+            const maxChaseDist = this.config.viewDist * 1.5;
+            if (distToPlayer > maxChaseDist) {
+                // 遠すぎたら巡回に戻す
+                this.state = 'patrol'; this.path = []; this.losTimer = 0;
+            } else if (isBlockedByWall) {
+                // 視界が遮られている場合はロスタイマーを進め、閾値で巡回へ
+                this.losTimer += deltaTime;
+                if (this.losTimer >= LOS_TIMEOUT_MS) { this.state = 'patrol'; this.path = []; this.losTimer = 0; }
+            } else {
+                // 見えていればロスタイマーをリセット
+                this.losTimer = 0;
+            }
+            // 経路再計算の頻度制御
+            if (this.pathTimer++ > 20) {
+                this.path = findPath({x: Math.floor(enemyPos.x/TILE_SIZE), z: Math.floor(enemyPos.z/TILE_SIZE)}, {x: Math.floor(playerPos.x/TILE_SIZE), z: Math.floor(playerPos.z/TILE_SIZE)});
+                this.pathTimer = 0;
             }
         }
 
-        if (this.path.length > 0) {
-            const target = this.path[0];
-            const moveAngle = Math.atan2(target.y - this.y, target.x - this.x);
-            this.x += Math.cos(moveAngle) * this.config.speed;
-            this.y += Math.sin(moveAngle) * this.config.speed;
-            let aDiff = moveAngle - this.angle;
-            while (aDiff < -Math.PI) aDiff += Math.PI * 2;
-            while (aDiff > Math.PI) aDiff -= Math.PI * 2;
-            this.angle += aDiff * 0.1;
-            if (getDistance(this, target) < 10) this.path.shift();
+        // 目標座標を決定（近ければ直接プレイヤーを目標、それ以外は経路の次ノード）
+        let targetPos = null;
+        if (this.state === 'chasing' && distToPlayer < TILE_SIZE * 1.5) {
+            targetPos = playerPos;
+        } else if (this.path && this.path.length > 0) {
+            const currentGridX = Math.floor(enemyPos.x/TILE_SIZE), currentGridZ = Math.floor(enemyPos.z/TILE_SIZE);
+            if (this.path[0].x === currentGridX && this.path[0].z === currentGridZ) this.path.shift();
+            if (this.path.length > 0) targetPos = new THREE.Vector3(this.path[0].x * TILE_SIZE + TILE_SIZE/2, 1, this.path[0].z * TILE_SIZE + TILE_SIZE/2);
         }
-    }
-    draw(cx, cy) {
-        const sx = this.x - cx, sy = this.y - cy;
-        ctx.save();
-        ctx.globalAlpha = this.state === 'chasing' ? 0.3 : 0.1;
-        ctx.fillStyle = this.state === 'chasing' ? '#ff4444' : '#ffffff';
-        ctx.beginPath(); ctx.moveTo(sx, sy);
-        ctx.arc(sx, sy, this.config.viewDist, this.angle - this.config.viewAngle/2, this.angle + this.config.viewAngle/2);
-        ctx.fill();
-        ctx.restore();
-        ctx.save();
-        ctx.translate(sx, sy); ctx.rotate(this.angle);
-        ctx.fillStyle = this.config.color;
-        if (this.config.hitbox === 'circle') {
-            ctx.beginPath(); ctx.arc(0,0,this.config.radius,0,Math.PI*2); ctx.fill();
-        } else {
-            ctx.fillRect(-this.config.width/2, -this.config.height/2, this.config.width, this.config.height);
+
+        // 目標があれば向きを滑らかに回転させて前進する
+        if (targetPos) {
+            const moveVec = new THREE.Vector3().subVectors(targetPos, enemyPos);
+            const targetAngle = Math.atan2(moveVec.z, moveVec.x);
+            let diff = targetAngle - this.angle;
+            while(diff < -Math.PI) diff += Math.PI*2;
+            while(diff > Math.PI) diff -= Math.PI*2;
+            const TURN_SPEED = 0.03;
+
+if (diff > TURN_SPEED) diff = TURN_SPEED;
+if (diff < -TURN_SPEED) diff = -TURN_SPEED;
+
+this.angle += diff;
+            if (Math.abs(diff) < 0.5) {
+                const s = this.config.speed;
+                enemyPos.x += Math.cos(this.angle) * s; enemyPos.z += Math.sin(this.angle) * s;
+            }
         }
-        ctx.restore();
+        // 見た目反映（回転・視野の位置/角度）
+        this.mesh.rotation.y = -this.angle;
+        this.vision.position.set(enemyPos.x, 0.2, enemyPos.z);
+        this.vision.rotation.z = -this.angle;
+
+        // 状態情報を返す（上位で描画や当たり判定に利用）
+        return { id: this.id, losTimer: this.losTimer, state: this.state, dist: distToPlayer };
     }
 }
 
-// --- Game Logic & Controller ---
+// プレイヤーと敵のインスタンス作成
 const player = new Player();
 const enemies = [
-    new Enemy(TILE_SIZE*15, TILE_SIZE*10, 'scout', 0),
-    new Enemy(TILE_SIZE*25, TILE_SIZE*25, 'tank', 10),
-    new Enemy(TILE_SIZE*25, TILE_SIZE*25, 'predator', 20)
+    new Enemy(TILE_SIZE * 35.5, TILE_SIZE * 35.5, 0x00ffaa, 18, Math.PI/1.5, 0.15, "Green"),
+    new Enemy(TILE_SIZE * 35.5, TILE_SIZE * 5.5, 0xffcc00, 25, Math.PI*2, 0.12, "Yellow"),
+    new Enemy(TILE_SIZE * 5.5, TILE_SIZE * 35.5, 0xff3366, 20, Math.PI/3, 0.22, "Red")
 ];
-let frameCount = 0;
 
-//すべてのゲーム内ロジックを更新する関数
+// DOM 要素（任意）を取得: ステータス・デバッグ・メッセージオーバーレイ
+const statusEl = document.getElementById('status');
+const debugEl = document.getElementById('debug-info');
+const msgOverlay = document.getElementById('msg-overlay');
 
-function update() {
-    frameCount++;
+// ループ用タイマーとゲームオーバーフラグ
+let lastTime = performance.now();
+let isGameOver = false;
+
+// 更新処理: プレイヤー/敵/当たり判定/デバッグ更新
+function update(deltaTime) {
+    if (isGameOver) return; // ゲームオーバー中は更新しない
+
     player.update();
-    enemies.forEach(e => e.update(player, frameCount));
-
-    // 当たり判定のチェック（必要に応じて追加）
-    enemies.forEach(e => {
-        if (checkCollision(player, e)) {
-            // ここに衝突時のペナルティなどを記述
-        }
-    });
-}
-
-//キャンバスへの描画のみを行う関数
-
-function draw() {
-    // キャンバスのリサイズ対応
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-
-    const cx = player.x - canvas.width/2;
-    const cy = player.y - canvas.height/2;
-            
-    // 背景クリア
-    ctx.fillStyle = '#050508'; 
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-    // マップ（壁）の描画範囲（カリング）
-    ctx.fillStyle = '#1a1a25';
-    const startGX = Math.max(0, Math.floor(cx / TILE_SIZE));
-    const endGX = Math.min(GRID_WIDTH, Math.ceil((cx + canvas.width) / TILE_SIZE));
-    const startGY = Math.max(0, Math.floor(cy / TILE_SIZE));
-    const endGY = Math.min(GRID_HEIGHT, Math.ceil((cy + canvas.height) / TILE_SIZE));
-
-    for(let y=startGY; y<endGY; y++) {
-        for(let x=startGX; x<endGX; x++) {
-            if (WORLD_MAP[y][x] === 1) {
-                ctx.fillRect(x*TILE_SIZE-cx, y*TILE_SIZE-cy, TILE_SIZE, TILE_SIZE);
+    let isChased = false;
+    let debugText = "";
+    
+    for (const e of enemies) {
+        const info = e.update(player, deltaTime);
+        if (info.state === 'chasing') {
+            isChased = true;
+            if (info.losTimer > 0) {
+                const timeLeft = Math.max(0, (LOS_TIMEOUT_MS - info.losTimer) / 1000).toFixed(1);
+                debugText += `${info.id}: ロストまで ${timeLeft}s<br>`;
             }
         }
+        // 当たり判定: 十分近ければゲームオーバー
+        if (info.dist < CAPTURE_DIST) {
+            triggerGameOver();
+        }
     }
 
-    // オブジェクトの描画
-    enemies.forEach(e => e.draw(cx, cy));
-    player.draw(cx, cy);
-
-    // UIの更新（ステータス表示）
-    // const isAnyChasing = enemies.some(e => e.state === 'chasing');
-    // statusEl.textContent = isAnyChasing ? "発見されました！" : "隠密中";
-    // statusEl.className = isAnyChasing ? "detected" : "hidden";
+    // ステータスやデバッグ表示の更新（存在チェックあり）
+    if (statusEl) {
+        statusEl.textContent = isChased ? "発見されました！" : "隠密中";
+        statusEl.className = isChased ? "detected" : "hidden";
+    }
+    if (debugEl) {
+        debugEl.innerHTML = debugText;
+    }
 }
 
-function gameLoop(timestamp) {
-    const deltaTime = timestamp - lastTime;
-    lastTime = timestamp;
-    accumulator += deltaTime;
-
-    while (accumulator >= timeStep) {
-        update();
-        accumulator -= timeStep;
+// ゲームオーバー処理: 表示して一定時間後にリスポーン
+function triggerGameOver() {
+    if (isGameOver) return;
+    isGameOver = true;
+    if (msgOverlay) {
+        msgOverlay.style.display = 'flex';
     }
+    setTimeout(() => {
+        isGameOver = false;
+        if (msgOverlay) {
+            msgOverlay.style.display = 'none';
+        }
+        player.reset();
+        enemies.forEach(e => e.reset());
+    }, 2000); // 2秒後に復活
+}
 
+// 描画: カメラ追従とレンダリング
+function draw() {
+    camera.position.set(player.mesh.position.x + CAM_OFFSET.x, player.mesh.position.y + CAM_OFFSET.y, player.mesh.position.z + CAM_OFFSET.z);
+    camera.lookAt(player.mesh.position);
+    renderer.render(scene, camera);
+}
+
+// メインループ: delta 計算 → 更新 → 描画 → 次フレーム予約
+function loop() {
+    const currentTime = performance.now();
+    const deltaTime = currentTime - lastTime;
+    lastTime = currentTime;
+    update(deltaTime);
     draw();
-
-    requestAnimationFrame(gameLoop);
+    requestAnimationFrame(loop);
 }
+
+// ウィンドウリサイズ時はカメラとレンダラーを更新
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
