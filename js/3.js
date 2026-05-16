@@ -195,9 +195,12 @@ function startanimation(){
     }
 
     // カウントが6未満ならアニメーションを継続します
-    if (startCount < 100){
+    if (startCount < 200){
 
         requestAnimationFrame(startanimation);
+        if (startCount > 100){
+            start.style.display = "none";
+        }
 
     // 演出終了後にキャラクター選択画面へ移行します
     }else{
@@ -513,7 +516,7 @@ function handleClick() {
         const GRID_WIDTH = 40;
         const GRID_HEIGHT = 40;
         const PLAYER_RADIUS = 0.6;
-        const CAM_OFFSET = new THREE.Vector3(0, 35, 15);
+        const CAM_OFFSET = new THREE.Vector3(0, 20, 7);
         const LOS_TIMEOUT_MS = 5000;
         const CAPTURE_DIST = 1.2; // 捕まる距離（プレイヤーと敵の中心距離）
 
@@ -659,7 +662,7 @@ function handleClick() {
                 this.mesh.position.set(x, 1, z);
                 scene.add(this.mesh);
                 this.config = { viewDist: dist, viewAngle: angleFov, speed: speed };
-                this.angle = 0; this.state = 'patrol'; this.path = []; this.pathTimer = 0;
+                this.angle = 0; this.state = 'patrol'; this.path = []; this.pathTimer = 0; this.search = false;
                 this.losTimer = 0;
                 this.vision = new THREE.Mesh(new THREE.CircleGeometry(dist, 24, -angleFov/2, angleFov), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.15, side: THREE.DoubleSide }));
                 this.vision.rotation.x = -Math.PI / 2;
@@ -695,12 +698,15 @@ function handleClick() {
                     }
                 } else if (this.state === 'chasing') {
                     this.vision.material.color.setHex(0xff3333);
-                    const maxChaseDist = this.config.viewDist * 1.5;
+                    this.search = false;
+                    const maxChaseDist = this.config.viewDist * 2;
                     if (distToPlayer > maxChaseDist) {
-                        this.state = 'patrol'; this.path = []; this.losTimer = 0;
+                        this.state = 'Searching'; this.path = []; this.losTimer = 0;
                     } else if (isBlockedByWall) {
                         this.losTimer += deltaTime;
-                        if (this.losTimer >= LOS_TIMEOUT_MS) { this.state = 'patrol'; this.path = []; this.losTimer = 0; }
+                        if (this.losTimer >= LOS_TIMEOUT_MS) {
+                            this.state = 'Searching'; this.path = []; this.losTimer = 0;
+                        }
                     } else {
                         this.losTimer = 0;
                     }
@@ -708,15 +714,42 @@ function handleClick() {
                         this.path = findPath({x: Math.floor(enemyPos.x/TILE_SIZE), z: Math.floor(enemyPos.z/TILE_SIZE)}, {x: Math.floor(playerPos.x/TILE_SIZE), z: Math.floor(playerPos.z/TILE_SIZE)});
                         this.pathTimer = 0;
                     }
+                } else if (this.state === 'Searching'){
+                    this.vision.material.color.setHex(0xFFFF00);
+                    if (isVisible) this.state = 'chasing';
+                    if (!this.search) {
+                        this.path = findPath({x: Math.floor(enemyPos.x/TILE_SIZE), z: Math.floor(enemyPos.z/TILE_SIZE)}, {x: Math.floor(playerPos.x/TILE_SIZE), z: Math.floor(playerPos.z/TILE_SIZE)});
+                        this.search = true;
+                    }
                 }
 
                 let targetPos = null;
                 if (this.state === 'chasing' && distToPlayer < TILE_SIZE * 1.5) {
                     targetPos = playerPos;
                 } else if (this.path && this.path.length > 0) {
-                    const currentGridX = Math.floor(enemyPos.x/TILE_SIZE), currentGridZ = Math.floor(enemyPos.z/TILE_SIZE);
-                    if (this.path[0].x === currentGridX && this.path[0].z === currentGridZ) this.path.shift();
-                    if (this.path.length > 0) targetPos = new THREE.Vector3(this.path[0].x * TILE_SIZE + TILE_SIZE/2, 1, this.path[0].z * TILE_SIZE + TILE_SIZE/2);
+                    const currentGridX = Math.floor(enemyPos.x / TILE_SIZE), 
+                        currentGridZ = Math.floor(enemyPos.z / TILE_SIZE);
+
+                    // 1. 今いるマスが目的地(path[0])なら
+                    if (this.path[0].x === currentGridX && this.path[0].z === currentGridZ) {
+                        this.path.shift(); // 先頭を削除
+
+                        // 2. ★ここでチェック：削除した結果、経路が空（目的地に到着）したか？
+                        if (this.path.length === 0) {
+                            this.search = false; // 探索完了フラグを戻す
+                            if (this.state === 'Searching') {
+                                this.state = 'patrol'; // ここで初めてパトロールに戻る
+                            }
+                        }
+                    }
+                    // 3. 経路がまだ残っているなら、次の移動先（targetPos）を更新する
+                    if (this.path.length > 0) {
+                        targetPos = new THREE.Vector3(
+                            this.path[0].x * TILE_SIZE + TILE_SIZE / 2, 
+                            1, 
+                            this.path[0].z * TILE_SIZE + TILE_SIZE / 2
+                        );
+                    }
                 }
 
                 if (targetPos) {
