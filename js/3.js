@@ -32,6 +32,8 @@ let flash = 0;
 let count = 0;
 // フラッシュの間隔を制御する変数です
 let flashwait = 10;
+//最後のボタンの表示時間をカウントする変数です
+let lasttime = 0;
 // 選択したキャラクターを保持する変数です
 let mycharacter = null;
 // キャラクター選択モードかどうかを管理するフラグです
@@ -161,6 +163,10 @@ function startanimation(){
         }
     }
 
+    if (count == 6){
+        lasttime ++;
+    }
+
     // カウントに応じて点滅の速さやボタンのテキストを不気味に変更します
     if (count == 1){
         flashwait = 5
@@ -180,24 +186,16 @@ function startanimation(){
         flashwait = 2
         start.textContent = "豁ｻ";
     }else if (count == 6){
-        start.style.display = "none";
         start.textContent = "start";
     }
 
     // カウントが6未満ならアニメーションを継続します
-    if (count < 6){
-
-    requestAnimationFrame(startanimation);
-
+    if (lasttime < 100){
+        requestAnimationFrame(startanimation);
     // 演出終了後にキャラクター選択画面へ移行します
     }else{
         start.style.display = "none";
         characterselection();
-    }
-    
-    // 異常に時間が経過した場合はボタンを隠します
-    if (flash > 50){
-       start.style.display = "none";
     }
 }
 
@@ -893,6 +891,18 @@ class Enemy {
 
                 this.lastKnownPos =
                     playerPos.clone();
+
+                // 【追加】音のした場所までの迂回経路を計算します
+                this.path = findPath(
+                    {
+                        x: Math.floor(enemyPos.x / TILE_SIZE),
+                        z: Math.floor(enemyPos.z / TILE_SIZE)
+                    },
+                    {
+                        x: Math.floor(this.lastKnownPos.x / TILE_SIZE),
+                        z: Math.floor(this.lastKnownPos.z / TILE_SIZE)
+                    }
+                );
             }
 
             // 直接見つけたら追跡状態に移行します
@@ -926,22 +936,39 @@ class Enemy {
                 });
             }
 
-            // 目的地に到達していたら、次の巡回地点への経路を計算します
+// 目的地に到達していたら、マップ上の有効な床からランダムに次の目的地を選んで経路を計算します
             if (this.path.length === 0) {
 
-                const target =
-                    this.patrolPoints[
-                        this.currentPatrol
-                    ];
+                let validFloorTiles = [];
+                // 【修正】MAP を WORLD_MAP に変更
+                const rows = WORLD_MAP.length;
+                const cols = WORLD_MAP[0].length;
 
+                // マップ全体をスキャンして、壁（1）以外の床（0）の座標をすべてリストアップします
+                for (let r = 0; r < rows; r++) {
+                    for (let c = 0; c < cols; c++) {
+                        // 【修正】MAP を WORLD_MAP に変更
+                        if (WORLD_MAP[r][c] === 0) {
+                            validFloorTiles.push({ x: c, z: r });
+                        }
+                    }
+                }
+
+                let target = null;
+                if (validFloorTiles.length > 0) {
+                    // 床のリストからランダムに1つのマスを選びます
+                    const randomIndex = Math.floor(Math.random() * validFloorTiles.length);
+                    target = validFloorTiles[randomIndex];
+                } else {
+                    // 万が一床が見つからなかった場合の安全なフォールバック
+                    target = { x: 1, z: 1 };
+                }
+
+                // 選ばれたランダムな目的地に向けてA*の経路を計算します
                 this.path = findPath(
                     {
-                        x: Math.floor(
-                            enemyPos.x / TILE_SIZE
-                        ),
-                        z: Math.floor(
-                            enemyPos.z / TILE_SIZE
-                        )
+                        x: Math.floor(enemyPos.x / TILE_SIZE),
+                        z: Math.floor(enemyPos.z / TILE_SIZE)
                     },
                     target
                 );
@@ -1089,82 +1116,57 @@ class Enemy {
         }
 
         // --- 移動先の目標決定 ---
-
         let targetPos = null;
 
-        // 不審なときはその座標を目指します
+        // 非常に近い場合は経路を無視してプレイヤーに突進します（chasing時のみ）
         if (
-            this.state === "suspicious" &&
-            this.lastKnownPos
-        ) {
-
-            targetPos = this.lastKnownPos;
-        }
-
-        // 非常に近い場合は経路を無視してプレイヤーに突進します
-        else if (
             this.state === "chasing" &&
-            distToPlayer <
-            TILE_SIZE * 1.5
+            distToPlayer < TILE_SIZE * 1.5
         ) {
-
             targetPos = playerPos;
         }
-
-        // それ以外はA*で算出した経路に従います
+        // patrol, chasing に加え、suspicious のときもA*の経路に従わせます
         else if (
             this.path &&
             this.path.length > 0
         ) {
+            // 目標マスの中心座標
+            const nextTargetX = this.path[0].x * TILE_SIZE + TILE_SIZE / 2;
+            const nextTargetZ = this.path[0].z * TILE_SIZE + TILE_SIZE / 2;
 
-            const currentGridX =
-                Math.floor(
-                    enemyPos.x / TILE_SIZE
-                );
+            // 目標マスの中心までの距離を計算
+            const distToNextNode = Math.sqrt(
+                (enemyPos.x - nextTargetX) ** 2 + 
+                (enemyPos.z - nextTargetZ) ** 2
+            );
 
-            const currentGridZ =
-                Math.floor(
-                    enemyPos.z / TILE_SIZE
-                );
-
-            // 現在の目的地マスに着いたらリストから削除します
-            if (
-                this.path[0].x === currentGridX &&
-                this.path[0].z === currentGridZ
-            ) {
-
+            // 1.5ユニット以内に近づいたら次のマスへ進む（前のマスの端で止まるバグを防止）
+            if (distToNextNode < 1.5) {
                 this.path.shift();
 
-                // 巡回ポイントに全て着いたら次をセットします
+                // 巡回ポイントに全て着いたら次をセットします（patrol時のみ）
                 if (
                     this.state === "patrol" &&
                     this.path.length === 0
                 ) {
-
                     this.currentPatrol =
-                        (
-                            this.currentPatrol + 1
-                        ) %
-                        this.patrolPoints.length;
+                        (this.currentPatrol + 1) % this.patrolPoints.length;
                 }
             }
 
             // 経路の次のマスを目標地点に設定します
             if (this.path.length > 0) {
-
-                targetPos =
-                    new THREE.Vector3(
-                        this.path[0].x *
-                        TILE_SIZE +
-                        TILE_SIZE / 2,
-
-                        1,
-
-                        this.path[0].z *
-                        TILE_SIZE +
-                        TILE_SIZE / 2
-                    );
+                targetPos = new THREE.Vector3(
+                    this.path[0].x * TILE_SIZE + TILE_SIZE / 2,
+                    1,
+                    this.path[0].z * TILE_SIZE + TILE_SIZE / 2
+                );
             }
+        }
+
+        // 【ここが追加ロジック】もしA*の経路が何らかの理由で空っぽ、かつ suspicious 状態なら直接向かう（保険）
+        if (!targetPos && this.state === "suspicious" && this.lastKnownPos) {
+            targetPos = this.lastKnownPos;
         }
 
         // --- 実際の移動計算 ---
@@ -1204,7 +1206,11 @@ class Enemy {
                 const s = this.config.speed;
                 const moveX = Math.cos(this.angle) * s;
                 const moveZ = Math.sin(this.angle) * s;
-                const collisionMargin = Math.max(this.width, this.depth) * 0.4;
+                
+                // 【修正ポイント】マージンを少し控えめ（サイズの一番小さい部分を基準など）にするか、固定値（0.4〜0.5程度）にします
+                // 敵のメッシュが壁に少しめり込むのを防ぎつつ、通れるように調整します
+                const collisionMargin = 0.5; 
+
                 if (!checkWallCollision(enemyPos.x + moveX, enemyPos.z, collisionMargin)) enemyPos.x += moveX;
                 if (!checkWallCollision(enemyPos.x, enemyPos.z + moveZ, collisionMargin)) enemyPos.z += moveZ;
             }
@@ -1226,14 +1232,14 @@ class Enemy {
 
         // 新しい当たり判定の呼び出し
         const isCaptured = this.checkCollisionWithPlayer(player);
-        return { id: this.id, losTimer: this.losTimer, state: this.state, isCaptured };
-
-        // メインループに状態情報を返します
-        return {
-            id: this.id,
-            losTimer: this.losTimer,
-            state: this.state,
-            dist: distToPlayer
+        
+        // すべての必要な状態情報を1つにまとめて返します
+        return { 
+            id: this.id, 
+            losTimer: this.losTimer, 
+            state: this.state, 
+            isCaptured,
+            dist: distToPlayer 
         };
     }
 }
@@ -1242,7 +1248,7 @@ const player = new Player();
 // 敵の生成時に、最後に「幅」と「奥行き」を指定できるようにしました
 const enemies = [
     // Green: 横長 (幅2.5, 奥行き1.0)
-    new Enemy(TILE_SIZE * 35.5, TILE_SIZE * 35.5, 0x00ffaa, 18, Math.PI/1.5, 0.15, "Green", 2.5, 1.0),
+    new Enemy(TILE_SIZE * 35.5, TILE_SIZE * 35.5, 0x00ffaa, 18, Math.PI/1.5, 0.15, "Green", 5.0, 1.0),
     // Yellow: 巨大 (幅3.0, 奥行き3.0)
     new Enemy(TILE_SIZE * 35.5, TILE_SIZE * 5.5, 0xffcc00, 25, Math.PI*2, 0.12, "Yellow", 3.0, 3.0),
     // Red: 標準を少し細く (幅0.8, 奥行き1.5)
